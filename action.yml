@@ -1,0 +1,283 @@
+# OpenSoyce PR-walkthrough Action — THIN edition.
+#
+# Runs the PUBLISHED `opensoyce` npm CLI (https://www.npmjs.com/package/opensoyce)
+# via `npx` — no monorepo checkout, no build-from-source, nothing proprietary
+# beyond the deliberately-public npm package. This repo owns only: the trigger
+# (this file), comment formatting (comment-builder.mjs — pure markdown
+# templating over the CLI's own --json output shape, not the phase0 pipeline
+# itself), and comment dedup (post-comment.sh). The CLI is the engine; this
+# repo is auto-pilot.
+#
+# DOCTRINE (inherited from the private monorepo's actions/ingest-dependencies,
+# same boundary):
+#   The workflow may pass context.
+#   The action may not sniff context.
+# This action takes EXPLICIT inputs only. It reads no ambient run context
+# itself — your workflow passes the PR URL, provider, key, and token
+# explicitly (see README). The only github.* reference in this file is
+# github.action_path, which locates the action's own files, not the run.
+#
+# COST/ACCESS: the provider API key is YOUR secret, set on YOUR workflow —
+# your key, your cost, your access model. This action never ships or falls
+# back to a shared key.
+#
+# ZERO CUSTODY: OpenSoyce never stores, receives, or transits customer code or
+# walkthroughs. The generated walkthrough is committed into THIS repo (yours,
+# checked out with your own token) — never OpenSoyce's — and the PR comment
+# links to it via raw.githubusercontent.com, which the viewer's own browser
+# fetches directly. OpenSoyce's server is never in that path. For a private
+# repo there is no such one-click link yet (raw.githubusercontent.com won't
+# serve a private file to an unauthenticated browser) — the comment says so
+# plainly instead of showing a broken link.
+#
+# LICENSING: public repos are free, forever — the published CLI never asks
+# for a License Record on a public repo. Private repos require an active
+# OpenSoyce License Record (opensoyce-license.json) in the checked-out repo;
+# the CLI fails closed with the exact reason if it's missing, invalid, or
+# expired — this action does not duplicate that check, the CLI already does.
+#
+# NEVER posts a partial or best-effort walkthrough: a verify-fail, a missing
+# key, or an unauthenticated `gh` all fail the run AND post a comment saying
+# so — never a silent no-op, never a half-generated result.
+
+name: 'OpenSoyce PR Walkthrough'
+description: >-
+  Generate a verified PR walkthrough (parse -> cluster -> excerpt -> risk ->
+  verify) from a real GitHub PR, commit it into your own repo, and post a PR
+  comment with a live, zero-custody viewer link.
+
+inputs:
+  pr-url:
+    description: 'The PR URL to generate a walkthrough for. Pass it explicitly (github.event.pull_request.html_url).'
+    required: true
+  opensoyce-version:
+    description: >-
+      The EXACT published `opensoyce` npm version to run (e.g. "0.2.0"). No
+      default, deliberately: a supply-chain-integrity product does not
+      default its own Action to `npx opensoyce@latest` and auto-follow
+      upstream releases without you choosing to. Pin it, bump it on your own
+      schedule.
+    required: true
+  provider:
+    description: 'Model provider: anthropic | openai | gemini.'
+    required: true
+  api-key:
+    description: >-
+      API key for the selected provider. Store it as an encrypted secret and
+      pass its VALUE here (see the README usage example) — this action has no
+      implicit access to your secrets, same as any composite action. NOTE:
+      GitHub's action.yml template validator statically scans this whole file
+      for the literal "dollar-brace-brace" expression syntax, including inside
+      description text -- do not write a live-looking secrets.* or github.*
+      example inline here (github.action_path is the one exception composite
+      actions may reference); say it in plain words instead, or point at the
+      README.
+    required: true
+  github-token:
+    description: >-
+      Token for `gh` (both the CLI''s own `gh pr diff`/`gh pr view` calls and
+      this action''s comment-posting step). Pass your workflow's GitHub token
+      explicitly (see the README usage example) — this action does not read
+      it implicitly.
+    required: true
+  out:
+    description: 'Output path for the generated walkthrough.json.'
+    required: false
+    default: 'walkthrough.json'
+  comment:
+    description: 'Set "false" to skip posting/updating a PR comment (artifact upload still happens).'
+    required: false
+    default: 'true'
+  run-url:
+    description: >-
+      This workflow run's own URL, for the success comment's artifact link.
+      Optional (the comment omits the link if blank) — pass it explicitly
+      (see the README usage example for the exact expression to build it
+      from), per this action's explicit-inputs-only doctrine.
+    required: false
+    default: ''
+  pr-number:
+    description: >-
+      The bare PR number (not the URL) -- pass it explicitly (see the README
+      usage example). Used to name the committed walkthrough file uniquely
+      per PR (.opensoyce/walkthroughs/pr-<number>.json).
+    required: true
+  repository:
+    description: >-
+      owner/repo -- pass it explicitly (see the README usage example). Used
+      to build the raw.githubusercontent.com link to the file this action
+      commits into your repo.
+    required: true
+  repo-private:
+    description: >-
+      "true" if this repository is private, "false" if public -- pass it
+      explicitly (see the README usage example). Determines which success
+      comment this action posts: a live one-click link for public repos, or
+      the honest two-path message for private ones (raw.githubusercontent.com
+      cannot serve a private file to an unauthenticated browser).
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve the provider's env var and fail closed if the key is blank
+      id: resolve-key
+      shell: bash
+      env:
+        IN_PROVIDER: ${{ inputs.provider }}
+        IN_API_KEY: ${{ inputs.api-key }}
+      run: |
+        case "$IN_PROVIDER" in
+          anthropic) KEY_VAR=ANTHROPIC_API_KEY ;;
+          openai) KEY_VAR=OPENAI_API_KEY ;;
+          gemini) KEY_VAR=GEMINI_API_KEY ;;
+          *)
+            echo "::error::Unknown provider \"$IN_PROVIDER\" -- must be one of: anthropic, openai, gemini"
+            echo "reason=Unknown provider \"$IN_PROVIDER\" -- must be one of: anthropic, openai, gemini" >> "$GITHUB_OUTPUT"
+            exit 1
+            ;;
+        esac
+        if [ -z "$IN_API_KEY" ]; then
+          echo "::error::No API key was supplied for provider \"$IN_PROVIDER\". Set the $KEY_VAR secret on this repo (or org), then pass its value as this action's api-key input in your workflow."
+          echo "reason=No API key was supplied for provider \"$IN_PROVIDER\" -- set the $KEY_VAR secret and pass it as api-key in your workflow." >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        echo "key-var=$KEY_VAR" >> "$GITHUB_OUTPUT"
+
+    - name: Post the missing-key failure comment
+      if: failure() && steps.resolve-key.outcome == 'failure' && inputs.comment == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_URL: ${{ inputs.pr-url }}
+        REASON: ${{ steps.resolve-key.outputs.reason }}
+      run: |
+        node "${{ github.action_path }}/comment-builder.mjs" failure "$REASON" > /tmp/pr-walkthrough-comment.md
+        bash "${{ github.action_path }}/post-comment.sh" "$PR_URL" /tmp/pr-walkthrough-comment.md
+
+    - name: Generate the walkthrough (runs the PUBLISHED opensoyce CLI via npx — nothing built here)
+      id: generate
+      shell: bash
+      env:
+        IN_PR_URL: ${{ inputs.pr-url }}
+        IN_PROVIDER: ${{ inputs.provider }}
+        IN_OUT: ${{ inputs.out }}
+        IN_API_KEY: ${{ inputs.api-key }}
+        IN_VERSION: ${{ inputs.opensoyce-version }}
+        KEY_VAR: ${{ steps.resolve-key.outputs.key-var }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        declare "$KEY_VAR=$IN_API_KEY"
+        export "$KEY_VAR"
+
+        # SUPPLY-CHAIN ISOLATION (P1): the PR checkout can carry a project
+        # .npmrc that redirects an UNSCOPED package (like "opensoyce") to an
+        # attacker-controlled registry -- and this environment holds GH_TOKEN
+        # and the provider key while npx resolves/installs/runs it. Two
+        # independent defenses, not one:
+        #   1. Run npx from an isolated scratch directory, never the PR
+        #      checkout, so npm's cwd-upward .npmrc lookup never reaches the
+        #      repo's file at all.
+        #   2. Force the real registry and disable install scripts via env
+        #      vars regardless -- env vars outrank project .npmrc in npm's
+        #      own config precedence (cli > env > project .npmrc > user
+        #      .npmrc > global), so this holds even if (1) is ever weakened.
+        # --out and the License Record path are resolved to ABSOLUTE paths
+        # first, since the CLI must still read/write inside the real
+        # checkout, not the scratch dir we're about to cd into.
+        NPX_SCRATCH="$(mktemp -d)"
+        ABS_OUT="$IN_OUT"
+        case "$ABS_OUT" in /*) ;; *) ABS_OUT="$GITHUB_WORKSPACE/$ABS_OUT" ;; esac
+        export OPENSOYCE_LICENSE_RECORD_PATH="${OPENSOYCE_LICENSE_RECORD_PATH:-$GITHUB_WORKSPACE/.opensoyce/opensoyce-license.json}"
+        export npm_config_registry=https://registry.npmjs.org/
+        export npm_config_ignore_scripts=true
+
+        set +e
+        (cd "$NPX_SCRATCH" && npx --yes --registry=https://registry.npmjs.org/ "opensoyce@${IN_VERSION}" pr-walkthrough "$IN_PR_URL" \
+          --provider "$IN_PROVIDER" --out "$ABS_OUT" --json) \
+          > /tmp/pr-walkthrough-result.json 2> /tmp/pr-walkthrough-stderr.txt
+        CODE=$?
+        set -e
+        rm -rf "$NPX_SCRATCH"
+
+        # SECRET REDACTION (P2): GitHub's automatic log masking covers workflow
+        # RUN LOGS only -- it does NOT apply to PR comments created via the API
+        # (comment-builder.mjs / post-comment.sh below), so raw stderr must
+        # never carry a secret VALUE into one. Redact both possible secrets
+        # (the provider key and the GH token) before this file is used
+        # anywhere else, same discipline as api/_pr-walkthrough-chat.js's own
+        # key-stripping.
+        node -e "
+          const fs = require('fs');
+          const path = '/tmp/pr-walkthrough-stderr.txt';
+          let text = fs.readFileSync(path, 'utf8');
+          for (const secret of [process.env.IN_API_KEY, process.env.GH_TOKEN]) {
+            if (secret) text = text.split(secret).join('[REDACTED]');
+          }
+          fs.writeFileSync(path, text);
+        "
+
+        echo "exit-code=$CODE" >> "$GITHUB_OUTPUT"
+        cat /tmp/pr-walkthrough-stderr.txt >&2 || true
+        exit $CODE
+
+    - name: Post the generation-failure comment
+      if: failure() && steps.generate.outcome == 'failure' && inputs.comment == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_URL: ${{ inputs.pr-url }}
+      run: |
+        CODE="${{ steps.generate.outputs.exit-code }}"
+        case "$CODE" in
+          1) REASON="phase0 generated output that failed OpenSoyce's own verification -- refusing to post a partial result." ;;
+          4) REASON="the model provider's upstream API call failed." ;;
+          5) REASON="a usage/setup problem (malformed PR URL, gh not authenticated for this repo, no active License Record for a private repo, or similar)." ;;
+          *) REASON="the pr-walkthrough command exited with code $CODE." ;;
+        esac
+        node "${{ github.action_path }}/comment-builder.mjs" failure "$REASON" /tmp/pr-walkthrough-stderr.txt > /tmp/pr-walkthrough-comment.md
+        bash "${{ github.action_path }}/post-comment.sh" "$PR_URL" /tmp/pr-walkthrough-comment.md
+
+    - name: Upload the walkthrough artifact
+      if: success()
+      uses: actions/upload-artifact@v7
+      with:
+        name: pr-walkthrough
+        path: ${{ inputs.out }}
+
+    - name: Commit the walkthrough into THIS repo (zero custody -- never OpenSoyce's)
+      id: commit-walkthrough
+      if: success()
+      shell: bash
+      env:
+        IN_OUT: ${{ inputs.out }}
+        IN_PR_NUMBER: ${{ inputs.pr-number }}
+      run: |
+        DEST=".opensoyce/walkthroughs/pr-${IN_PR_NUMBER}.json"
+        mkdir -p "$(dirname "$DEST")"
+        cp "$IN_OUT" "$DEST"
+        git config user.name "opensoyce-bot"
+        git config user.email "opensoyce-bot@users.noreply.github.com"
+        git add "$DEST"
+        if git diff --cached --quiet; then
+          echo "no change to commit -- $DEST is already identical"
+        else
+          git commit -m "chore(opensoyce): update PR walkthrough for #${IN_PR_NUMBER}"
+          git push
+        fi
+        echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        echo "path=$DEST" >> "$GITHUB_OUTPUT"
+
+    - name: Post the success comment
+      if: success() && inputs.comment == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_URL: ${{ inputs.pr-url }}
+        RUN_URL: ${{ inputs.run-url }}
+        PRW_IS_PRIVATE: ${{ inputs.repo-private }}
+        PRW_COMMITTED_PATH: ${{ steps.commit-walkthrough.outputs.path }}
+        PRW_RAW_URL: https://raw.githubusercontent.com/${{ inputs.repository }}/${{ steps.commit-walkthrough.outputs.sha }}/${{ steps.commit-walkthrough.outputs.path }}
+      run: |
+        node "${{ github.action_path }}/comment-builder.mjs" success /tmp/pr-walkthrough-result.json "$RUN_URL" > /tmp/pr-walkthrough-comment.md
+        bash "${{ github.action_path }}/post-comment.sh" "$PR_URL" /tmp/pr-walkthrough-comment.md
