@@ -67,7 +67,7 @@ jobs:
 
       - uses: freewho99/opensoyce-pr-walkthrough-action@v1
         with:
-          opensoyce-version: '0.2.0' # pin to a real published version; bump on your own schedule
+          opensoyce-version: '0.2.1' # pin to a real published version; bump on your own schedule
           pr-url: ${{ github.event.pull_request.html_url }}
           pr-number: ${{ github.event.pull_request.number }}
           repository: ${{ github.repository }}
@@ -83,7 +83,7 @@ jobs:
 | Input | Required | Meaning |
 |---|---|---|
 | `pr-url` | yes | The PR to generate a walkthrough for — pass `github.event.pull_request.html_url` explicitly |
-| `opensoyce-version` | yes | The exact published `opensoyce` npm version to run, e.g. `0.2.0`. No default — pin deliberately |
+| `opensoyce-version` | yes | The exact published `opensoyce` npm version to run, e.g. `0.2.1`. No default — pin deliberately |
 | `pr-number` | yes | The bare PR number — pass `github.event.pull_request.number` explicitly. Names the committed file (`pr-<number>.json`) |
 | `repository` | yes | `owner/repo` — pass `github.repository` explicitly. Used to build the raw.githubusercontent.com link |
 | `repo-private` | yes | `"true"`/`"false"` — pass `github.event.repository.private` explicitly. Selects the public one-click-link comment vs. the private honest-limitation comment |

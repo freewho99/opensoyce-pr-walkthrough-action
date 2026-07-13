@@ -31,7 +31,10 @@ PR_NUMBER="${BASH_REMATCH[3]}"
 REPO="$OWNER/$REPO_NAME"
 
 BODY=$(cat "$BODY_FILE")
-EXISTING_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+# --paginate: the comments endpoint defaults to 30/page. Without it, a PR
+# with >30 comments before the marker comment would miss it here and this
+# script would fall through to posting a duplicate despite the dedupe intent.
+EXISTING_ID=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
   --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" \
   2>/dev/null | head -n1)
 
