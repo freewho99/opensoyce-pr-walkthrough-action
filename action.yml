@@ -52,7 +52,7 @@ inputs:
     required: true
   opensoyce-version:
     description: >-
-      The EXACT published `opensoyce` npm version to run (e.g. "0.2.0"). No
+      The EXACT published `opensoyce` npm version to run (e.g. "0.2.1"). No
       default, deliberately: a supply-chain-integrity product does not
       default its own Action to `npx opensoyce@latest` and auto-follow
       upstream releases without you choosing to. Pin it, bump it on your own
@@ -116,6 +116,10 @@ inputs:
       the honest two-path message for private ones (raw.githubusercontent.com
       cannot serve a private file to an unauthenticated browser).
     required: true
+
+branding:
+  icon: 'git-pull-request'
+  color: 'blue'
 
 runs:
   using: 'composite'
