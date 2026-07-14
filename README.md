@@ -1,4 +1,8 @@
+<img src="logo.png" alt="OpenSoyce logo" width="120" />
+
 # OpenSoyce PR Walkthrough — GitHub Action
+
+![Zero custody](https://img.shields.io/badge/zero_custody-yes-0B1F44?style=flat-square) ![Free for public repos](https://img.shields.io/badge/public_repos-free-C0392B?style=flat-square)
 
 A thin wrapper around the **published** `opensoyce` npm CLI's `pr-walkthrough` command:
 
