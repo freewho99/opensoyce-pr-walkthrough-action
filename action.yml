@@ -41,10 +41,7 @@
 # so — never a silent no-op, never a half-generated result.
 
 name: 'OpenSoyce PR Walkthrough'
-description: >-
-  Generate a verified PR walkthrough (parse -> cluster -> excerpt -> risk ->
-  verify) from a real GitHub PR, commit it into your own repo, and post a PR
-  comment with a live, zero-custody viewer link.
+description: 'Generate a verified PR walkthrough, commit it into your repo, and post a comment with a zero-custody viewer link.'
 
 inputs:
   pr-url:
