@@ -4,6 +4,8 @@
 
 ![Zero custody](https://img.shields.io/badge/zero_custody-yes-0B1F44?style=flat-square) ![Free for public repos](https://img.shields.io/badge/public_repos-free-C0392B?style=flat-square)
 
+**Add verified PR walkthroughs to your repository** — [View OpenSoyce PR Walkthrough on GitHub Marketplace](https://github.com/marketplace/actions/opensoyce-pr-walkthrough)
+
 A thin wrapper around the **published** `opensoyce` npm CLI's `pr-walkthrough` command:
 
 ```txt
